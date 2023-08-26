@@ -291,13 +291,9 @@ class TraceableImpl {};
 class TraceableError {
  public:
   TraceableError() = default;
-
   TraceableError(const TraceableError&) = default;
-
   TraceableError(TraceableError&&) = default;
-
   TraceableError& operator=(const TraceableError&) = default;
-
   TraceableError& operator=(TraceableError&&) = default;
 
  private:
@@ -346,7 +342,7 @@ class Result {
 
   value_type&& value_or(value_type&& other) && noexcept {
     if (var_.index() == 0) {
-      return std::get<0>(var_);
+      return std::get<0>(std::forward<decltype(var_)>(var_));
     }
     return std::move(other);
   }
@@ -356,9 +352,20 @@ class Result {
   decltype(auto) error() const& { return std::get<1>(var_); }
   decltype(auto) error() && { return std::get<1>(std::forward<decltype(var_)>(var_)); }
 
+  value_type& value() & { return std::get<0>(var_); }
+  const value_type& value() const& { return std::get<0>(var_); }
+  value_type&& value() && { return std::get<0>(std::forward<decltype(var_)>(var_)); }
+
  private:
-  decltype(auto) value() const& { return std::get<0>(var_); }
-  decltype(auto) value() && { return std::get<0>(std::forward<decltype(var_)>(var_)); }
+  template <class Self, class Fn>
+  static auto and_then_impl(Self&& self, Fn&& f) -> std::remove_cv_t<
+      std::remove_reference_t<std::invoke_result_t<Fn, decltype(std::forward<Self>(self).value())>>> {
+    if (self.has_value()) {
+      return std::forward<Fn>(f)(std::forward<Self>(self).value());
+    } else {
+      return {Err{}, std::forward<Self>(self).error()};
+    }
+  }
 
   template <class R, class Self, bool ValueMatched, bool ErrMatched>
   struct InnerPattern {
@@ -435,6 +442,30 @@ class Result {
     auto reduced = (... | match_pattern<result_type>(static_cast<Result&&>(*this), std::forward<Patterns>(patterns)));
     static_assert(decltype(reduced)::matched, "pattern matching doesn't cover all the cases");
     return reduced.fn(std::move(*this));
+  }
+
+  template <class Fn>
+  auto and_then(Fn&& f) & {
+    return and_then_impl(*this, std::forward<Fn>(f));
+  }
+
+  template <class Fn>
+  auto and_then(Fn&& f) const& {
+    return and_then_impl(*this, std::forward<Fn>(f));
+  }
+
+  template <class Fn>
+  auto and_then(Fn&& f) && {
+    return and_then_impl(static_cast<Result&&>(*this), std::forward<Fn>(f));
+  }
+
+  template <class Fn>
+  Result or_else(Fn&& f) const& {
+    if (has_value()) {
+      return *this;
+    } else {
+      return std::forward<Fn>(f)(error());
+    }
   }
 
  private:

@@ -43,6 +43,14 @@ int invalid_argument_handler(result::InvalidArgumentError) {
   return 0;
 }
 
+
+void MoveResult() {
+  Result<std::string, int> res(result::Ok{}, 100, '0');
+  std::cout << "res is " << (res.value_or("").empty() ? "empty" : "not empty") << " before moved\n";
+  auto str = std::move(res).value_or("");
+  std::cout << "res is " << (res.value_or("").empty() ? "empty" : "not empty") << " after moved\n";
+}
+
 int main() {
   auto v1 = ElementaryArithmeticFromZeroToMillion('+', 4, 3).match(
           result::Ok()  = [](int v) { return v; },
@@ -67,7 +75,7 @@ int main() {
                 return 0;
               });
 
-  auto res = ElementaryArithmeticFromZeroToMillion('^', 0, 0);
+  auto res = ElementaryArithmeticFromZeroToMillion('^', 1, 0);
   res.error().match(
       [](result::OutOfRangeError) {
         std::cout << "the arguments out of range\n";
@@ -87,5 +95,28 @@ int main() {
       invalid_argument_handler
       );
 
-  std::cout << v2 << '\n';
+  auto v3 = std::move(res)
+                .or_else([](const result::Error&) {
+                  std::cout << "op ^ failed, change to op /\n";
+                  return ElementaryArithmeticFromZeroToMillion('/', 1, 0);
+                })
+                .and_then([](int v) {
+                  std::cout << "op / succeed\n";
+                  return Result<int, result::Error>{v};
+                })
+                .or_else([](const result::Error&) {
+                  std::cout << "op / failed, change to op +\n";
+                  return ElementaryArithmeticFromZeroToMillion('+', 1, 0);
+                })
+                .and_then([](int v) {
+                  std::cout << "op + succeed, time the result by 10\n";
+                  return ElementaryArithmeticFromZeroToMillion('*', v, 10);
+                })
+                .or_else([](const result::Error&) {
+                  std::cout << "eventually failed, set value as -1\n";
+                  return Result<int, result::Error>{-1};
+                }).value();
+
+  std::cout << v3 << '\n';
+  MoveResult();
 }
