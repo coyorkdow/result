@@ -38,27 +38,54 @@ Result<T, result::Error> ElementaryArithmeticFromZeroToMillion(char op, T x, T y
   }
 }
 
+int invalid_argument_handler(result::InvalidArgumentError) {
+  std::cout << "invalid argument\n";
+  return 0;
+}
+
 int main() {
   auto v1 = ElementaryArithmeticFromZeroToMillion('+', 4, 3).match(
-      result::Ok() = [](int v) { return v; },
-      result::Err() = [](result::Error&&) { return 0; }
-  );
+          result::Ok()  = [](int v) { return v; },
+          result::Err() = [](result::Error&&) { return 0; });
   std::cout << v1 << '\n';
 
   auto v2 = ElementaryArithmeticFromZeroToMillion('-', 1.5, 10.5).match(
-      result::Ok()  = [](double v) { return v; },
-      result::Err() = [](result::OutOfRangeError) {
-        std::cout << "the arguments of calculating v2 out of range\n";
+          result::Ok() = [](double v) { return v; },
+          result::Err() =
+              [](result::OutOfRangeError) {
+                std::cout << "the arguments of calculating v2 out of range\n";
+                return 0;
+              },
+          result::Err() =
+              [](result::RangeError) {
+                std::cout << "the result of calculating v2 out of range\n";
+                return 0;
+              },
+          result::Err() =
+              [](result::Error&&) {
+                std::cout << "unknown error\n";
+                return 0;
+              });
+
+  auto res = ElementaryArithmeticFromZeroToMillion('^', 0, 0);
+  res.error().match(
+      [](result::OutOfRangeError) {
+        std::cout << "the arguments out of range\n";
         return 0;
       },
-      result::Err() = [](result::RangeError) {
-        std::cout << "the result of calculating v2 out of range\n";
-        return 0;
-      },
-      result::Err() = [](result::Error&&) {
+      invalid_argument_handler,
+      [](result::Error) {
         std::cout << "unknown error\n";
         return 0;
-      }
-  );
+      });
+
+  res.error().match(
+      [](result::Error) {
+        std::cout << "unknown error\n";
+        return 0;
+      },
+      invalid_argument_handler
+      );
+
   std::cout << v2 << '\n';
 }

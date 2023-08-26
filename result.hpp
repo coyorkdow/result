@@ -83,13 +83,19 @@ struct FunctorTraits<R*(Arg)> {
   using arg_type = Arg;
 };
 
+template <class R, class Arg>
+struct FunctorTraits<R(Arg)> {
+  using result_type = R;
+  using arg_type = Arg;
+};
+
 template <class Fn, class Arg, bool IsErr = false>
 struct Pattern {
-  using result_type = std::invoke_result_t<Fn&&, Arg&&>;
+  using result_type = std::invoke_result_t<Fn, Arg>;
   using arg_type = Arg;
   static constexpr bool is_err = IsErr;
 
-  result_type operator()(Arg&& arg) { return std::forward<Fn>(f)(std::forward<Arg&&>(arg)); }
+  result_type operator()(Arg arg) { return f(std::forward<Arg>(arg)); }
 
   Fn f;
 };
@@ -103,6 +109,11 @@ struct Ok {
     using OkT = details::Pattern<Fn, typename details::FunctorTraits<std::remove_reference_t<Fn>>::arg_type>;
     return OkT{std::forward<Fn>(f)};
   }
+
+  template <class R, class Arg>
+  auto operator=(R (*fptr)(Arg)) && -> details::Pattern<R (*)(Arg), Arg> {
+    return details::Pattern<R (*)(Arg), Arg>{fptr};
+  }
 };
 
 struct Err {
@@ -111,6 +122,11 @@ struct Err {
       std::remove_reference_t<Fn>, typename details::FunctorTraits<std::remove_reference_t<Fn>>::arg_type, true> {
     using ErrT = details::Pattern<Fn, typename details::FunctorTraits<std::remove_reference_t<Fn>>::arg_type, true>;
     return ErrT{std::forward<Fn>(f)};
+  }
+
+  template <class R, class Arg>
+  auto operator=(R (*fptr)(Arg)) && -> details::Pattern<R (*)(Arg), Arg, true> {
+    return details::Pattern<R (*)(Arg), Arg, true>{fptr};
   }
 };
 
@@ -137,13 +153,9 @@ class Error {
 
  public:
   Error() = default;
-
   Error(const Error&) = default;
-
   Error(Error&&) = default;
-
   Error& operator=(const Error&) = default;
-
   Error& operator=(Error&&) = default;
 
   template <class Arg, std::enable_if_t<details::no_same_v<Arg, Error> && details::no_same_v<Arg, std::any>, int> = 0>
@@ -153,6 +165,78 @@ class Error {
   Error& operator=(Arg&& arg) {
     err_ = std::forward<Arg>(arg);
     return *this;
+  }
+
+  bool has_value() const noexcept { return err_.has_value(); }
+
+ private:
+  template <class R, class Self, bool Matched>
+  struct InnerPattern {
+    static constexpr bool matched = Matched;
+
+    template <bool M>
+    decltype(auto) operator|(InnerPattern<R, Self, M>&& y) && {
+      if constexpr (Matched) {
+        return *this;
+      } else {
+        using res_t = InnerPattern<R, Self, Matched | M>;
+        if (!fn && y.fn) {
+          return res_t{std::move(y.fn)};
+        } else {
+          return res_t{std::move(fn)};
+        }
+      }
+    }
+
+    std::function<R(Self&&)> fn;
+  };
+
+  template <class R, class Self, class Fn, class Arg>
+  static auto match_pattern(Self&& self, details::Pattern<Fn, Arg, true>&& pattern) {
+    if constexpr (std::is_convertible_v<Self, Arg>) {
+      using res_t = InnerPattern<R, Self, true>;
+      return res_t{[pattern = std::move(pattern)](Self&& s) mutable { return pattern(std::forward<Self>(s)); }};
+    } else {
+      using res_t = InnerPattern<R, Self, false>;
+      using rmed = std::remove_cv_t<std::remove_reference_t<Arg>>;
+      auto opt = ErrorCast<rmed>(std::forward<Self>(self));
+      if constexpr (std::is_convertible_v<rmed, Arg>) {
+        return opt.has_value() ? res_t{[pattern = std::move(pattern)](Self&& s) mutable {
+                                   auto opt = ErrorCast<rmed>(std::forward<Self>(s));
+                                   return pattern(std::move(opt).value());
+                                 }}
+                               : res_t{};
+      } else {
+        return res_t{};
+      }
+    }
+  }
+
+  template <class... Patterns>
+  std::common_type_t<typename Patterns::result_type...> match_impl(Patterns&&... patterns) const& {
+    using result_type = std::common_type_t<typename Patterns::result_type...>;
+    auto reduced = (... | match_pattern<result_type>(*this, std::forward<Patterns>(patterns)));
+    static_assert(decltype(reduced)::matched, "pattern matching doesn't cover all the cases");
+    return reduced.fn(*this);
+  }
+
+  template <class... Patterns>
+  std::common_type_t<typename Patterns::result_type...> match_impl(Patterns&&... patterns) && {
+    using result_type = std::common_type_t<typename Patterns::result_type...>;
+    auto reduced = (... | match_pattern<result_type>(static_cast<Error&&>(*this), std::forward<Patterns>(patterns)));
+    static_assert(decltype(reduced)::matched, "pattern matching doesn't cover all the cases");
+    return reduced.fn(std::move(*this));
+  }
+
+ public:
+  template <class... Fn>
+  decltype(auto) match(Fn&&... fn) const& {
+    return match_impl((Err() = std::forward<Fn>(fn))...);
+  }
+
+  template <class... Fn>
+  decltype(auto) match(Fn&&... fn) && {
+    return match_impl((Err() = std::forward<Fn>(fn))...);
   }
 
  private:
@@ -269,12 +353,12 @@ class Result {
 
   bool has_value() const noexcept { return var_.index() == 0; }
 
+  decltype(auto) error() const& { return std::get<1>(var_); }
+  decltype(auto) error() && { return std::get<1>(std::forward<decltype(var_)>(var_)); }
+
  private:
   decltype(auto) value() const& { return std::get<0>(var_); }
   decltype(auto) value() && { return std::get<0>(std::forward<decltype(var_)>(var_)); }
-
-  decltype(auto) error() const& { return std::get<1>(var_); }
-  decltype(auto) error() && { return std::get<1>(std::forward<decltype(var_)>(var_)); }
 
   template <class R, class Self, bool ValueMatched, bool ErrMatched>
   struct InnerPattern {
@@ -285,12 +369,13 @@ class Result {
     decltype(auto) operator|(InnerPattern<R, Self, VM, EM>&& y) && {
       if constexpr (ValueMatched && ErrMatched) {
         return *this;
-      }
-      using res_t = InnerPattern<R, Self, ValueMatched | VM, ErrMatched | EM>;
-      if (!fn && y.fn) {
-        return res_t{std::move(y.fn)};
       } else {
-        return res_t{std::move(fn)};
+        using res_t = InnerPattern<R, Self, ValueMatched | VM, ErrMatched | EM>;
+        if (!fn && y.fn) {
+          return res_t{std::move(y.fn)};
+        } else {
+          return res_t{std::move(fn)};
+        }
       }
     }
 
@@ -304,19 +389,16 @@ class Result {
     using self_error_type = decltype(std::forward<Self>(self).error());
     if constexpr (!IsErr && std::is_convertible_v<self_value_type, Arg>) {
       using res_t = InnerPattern<R, Self, true, false>;
-      return self.has_value() ?
-                                res_t{
-                                  [pattern = std::move(pattern)](Self&& s) mutable {
-                                    return pattern(std::forward<Self>(s).value());
-                                  }}
+      return self.has_value() ? res_t{[pattern = std::move(pattern)](Self&& s) mutable {
+                                  return pattern(std::forward<Self>(s).value());
+                                }}
                               : res_t{};
     } else if constexpr (IsErr && std::is_convertible_v<self_error_type, Arg>) {
       using res_t = InnerPattern<R, Self, false, true>;
-      return self.has_value() ? res_t{} :
-                                res_t{
-                                  [pattern = std::move(pattern)](Self&& s) mutable {
-                                    return pattern(std::forward<Self>(s).error());
-                                  }};
+      return self.has_value() ? res_t{}
+                              : res_t{[pattern = std::move(pattern)](Self&& s) mutable {
+                                  return pattern(std::forward<Self>(s).error());
+                                }};
     } else if constexpr (IsErr && std::is_same_v<E, Error>) {
       using res_t = InnerPattern<R, Self, false, false>;
       if (self.has_value()) {
@@ -325,12 +407,10 @@ class Result {
       using rmed = std::remove_cv_t<std::remove_reference_t<Arg>>;
       auto opt = ErrorCast<rmed>(std::forward<Self>(self).error());
       if constexpr (std::is_convertible_v<rmed, Arg>) {
-        return opt.has_value() ?
-                                 res_t{
-                                   [pattern = std::move(pattern)](Self&& s) mutable {
-                                      auto opt = ErrorCast<rmed>(std::forward<Self>(s).error());
-                                      return pattern(std::move(opt).value());
-                                   }}
+        return opt.has_value() ? res_t{[pattern = std::move(pattern)](Self&& s) mutable {
+                                   auto opt = ErrorCast<rmed>(std::forward<Self>(s).error());
+                                   return pattern(std::move(opt).value());
+                                 }}
                                : res_t{};
       } else {
         return res_t{};
@@ -346,7 +426,7 @@ class Result {
     using result_type = std::common_type_t<typename Patterns::result_type...>;
     auto reduced = (... | match_pattern<result_type>(*this, std::forward<Patterns>(patterns)));
     static_assert(decltype(reduced)::matched, "pattern matching doesn't cover all the cases");
-    return reduced(*this);
+    return reduced.fn(*this);
   }
 
   template <class... Patterns>
