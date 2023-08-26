@@ -468,6 +468,15 @@ class Result {
     }
   }
 
+  template <class Fn>
+  Result or_else(Fn&& f) && {
+    if (has_value()) {
+      return std::move(*this);
+    } else {
+      return std::forward<Fn>(f)(error());
+    }
+  }
+
  private:
   std::variant<value_type, error_type> var_;
 };
