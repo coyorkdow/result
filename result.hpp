@@ -282,24 +282,6 @@ struct RuntimeError {};
 struct RangeError : RuntimeError {};
 struct OverflowError : RuntimeError {};
 
-namespace details {
-
-class TraceableImpl {};
-
-}  // namespace details
-
-class TraceableError {
- public:
-  TraceableError() = default;
-  TraceableError(const TraceableError&) = default;
-  TraceableError(TraceableError&&) = default;
-  TraceableError& operator=(const TraceableError&) = default;
-  TraceableError& operator=(TraceableError&&) = default;
-
- private:
-  std::shared_ptr<details::TraceableImpl> impl_;
-};
-
 template <class Tp, class E>
 class Result {
  public:
