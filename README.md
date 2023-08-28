@@ -6,6 +6,12 @@ cpp17 required
 ## Basic Usage
 
 ```cpp
+#include <iostream>
+#include <limits>
+
+#include "result.hpp"
+using result::Result;
+
 // define a Result of int64, which error type is int
 Result<int64_t, int> Multiply(int64_t a, int64_t b) {
     int64_t res = a * b;
@@ -19,12 +25,12 @@ int main() {
     // do pattern matching
     auto v = Multiply(1000, 1000).match(
         result::Ok()  = [](int64_t v) { return v; },
-        result::Err() = [] (int err) { std::cerr << "arithmetic overflow\n"; return err; }
+        result::Err() = [](int err) { std::cerr << "arithmetic overflow\n"; return err; }
     );
     std::cout << v << '\n';
     v = Multiply(std::numeric_limits<int64_t>::max(), 1000).match(
         result::Ok()  = [](int64_t v) { return v; },
-        result::Err() = [] (int err) { std::cerr << "arithmetic overflow\n"; return err; }
+        result::Err() = [](int err) { std::cerr << "arithmetic overflow\n"; return err; }
     );
     std::cout << v << '\n';
 }
