@@ -1,6 +1,7 @@
 # result
 Rust style error handling for cpp. It provides `result::Result` which supports pattern matching error handling and monadic operation.
 
+cpp17 required
 
 ## Basic Usage
 
